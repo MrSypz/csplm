@@ -1,103 +1,314 @@
-import Image from "next/image";
+"use client"
 
-export default function Home() {
+import { useState, useCallback, useRef, useEffect } from "react"
+import Canvas from "@/components/canvas"
+import LayerPanel from "@/components/layer-panel"
+import ExportManager from "@/components/export-manager"
+import {
+  TaskManager,
+  createQuickExportPNGTask,
+  createQuickExportJPGTask,
+  createBulkExportTask,
+  createSaveTask,
+  createSaveAsTask,
+  createOpenTask,
+} from "@/utils/tasks"
+import type { LayerPreset } from "@/types/project"
+
+interface Layer {
+  id: string
+  name: string
+  src: string
+  file_path: string
+  width: number
+  height: number
+  isVisible: boolean
+  zIndex: number
+}
+
+export default function ImageEditor() {
+  const [zoom, setZoom] = useState(0.3)
+  const [panX, setPanX] = useState(0)
+  const [panY, setPanY] = useState(0)
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null)
+  const [viewportSize, setViewportSize] = useState({ width: 800, height: 600 })
+  const [isLayerPanelVisible, setIsLayerPanelVisible] = useState(true)
+  const [presets, setPresets] = useState<LayerPreset[]>([])
+  const [isExportManagerOpen, setIsExportManagerOpen] = useState(false)
+
+  // Start with empty project
+  const [canvasWidth, setCanvasWidth] = useState(6000)
+  const [canvasHeight, setCanvasHeight] = useState(6000)
+  const [layers, setLayers] = useState<Layer[]>([])
+
+  // Initialize task manager
+  const taskManagerRef = useRef<TaskManager | null>(null)
+
+  const handleLoadProject = useCallback(
+    (newLayers: Layer[], newPresets: LayerPreset[], newCanvasWidth: number, newCanvasHeight: number) => {
+      setLayers(newLayers)
+      setPresets(newPresets)
+      setCanvasWidth(newCanvasWidth)
+      setCanvasHeight(newCanvasHeight)
+      setSelectedLayerId(newLayers.length > 0 ? newLayers[0].id : null)
+
+      // Reset view
+      setZoom(0.3)
+      setPanX(0)
+      setPanY(0)
+    },
+    [],
+  )
+
+  useEffect(() => {
+    taskManagerRef.current = new TaskManager({
+      layers,
+      canvasWidth,
+      canvasHeight,
+      onApplyPreset: handleApplyPreset,
+      onLoadProject: handleLoadProject,
+    })
+  }, [layers, canvasWidth, canvasHeight, handleLoadProject])
+
+  // Update task manager context when dependencies change
+  useEffect(() => {
+    if (taskManagerRef.current) {
+      taskManagerRef.current.updateContext({
+        layers,
+        canvasWidth,
+        canvasHeight,
+        onApplyPreset: handleApplyPreset,
+        onLoadProject: handleLoadProject,
+      })
+    }
+  }, [layers, canvasWidth, canvasHeight, handleLoadProject])
+
+  const handleZoomChange = useCallback(
+    (newZoom: number, centerX?: number, centerY?: number) => {
+      if (centerX !== undefined && centerY !== undefined) {
+        const zoomRatio = newZoom / zoom
+        const newPanX = centerX - (centerX - panX) * zoomRatio
+        const newPanY = centerY - (centerY - panY) * zoomRatio
+
+        setPanX(newPanX)
+        setPanY(newPanY)
+      }
+      setZoom(newZoom)
+    },
+    [zoom, panX, panY],
+  )
+
+  const handlePanChange = useCallback((x: number, y: number) => {
+    setPanX(x)
+    setPanY(y)
+  }, [])
+
+  const handleLayerToggleVisibility = useCallback((id: string) => {
+    setLayers((prev) => prev.map((layer) => (layer.id === id ? { ...layer, isVisible: !layer.isVisible } : layer)))
+  }, [])
+
+  const handleLayerSelect = useCallback((id: string) => {
+    setSelectedLayerId(id)
+  }, [])
+
+  const handleAddLayer = useCallback(() => {
+    const maxZIndex = layers.length > 0 ? Math.max(...layers.map((l) => l.zIndex)) : -1
+    const newLayer: Layer = {
+      id: `layer-${Date.now()}`,
+      name: `New Layer ${layers.length + 1}`,
+      src: `/placeholder.svg?height=${canvasHeight}&width=${canvasWidth}&text=New+Layer+${layers.length + 1}`,
+      file_path: `./assets/new_layer_${layers.length + 1}.png`,
+      width: canvasWidth, // Use canvas width instead of fixed 2000
+      height: canvasHeight, // Use canvas height instead of fixed 2000
+      isVisible: true,
+      zIndex: maxZIndex + 1,
+    }
+    setLayers((prev) => [...prev, newLayer])
+    setSelectedLayerId(newLayer.id)
+  }, [layers, canvasWidth, canvasHeight])
+
+  const handleDeleteLayer = useCallback(
+    (id: string) => {
+      if (layers.length <= 1) return
+      setLayers((prev) => prev.filter((layer) => layer.id !== id))
+      if (selectedLayerId === id) {
+        const remainingLayers = layers.filter((l) => l.id !== id)
+        setSelectedLayerId(remainingLayers.length > 0 ? remainingLayers[0].id : null)
+      }
+    },
+    [layers, selectedLayerId],
+  )
+
+  const handleReorderLayers = useCallback((draggedId: string, targetId: string) => {
+    setLayers((prev) => {
+      const draggedIndex = prev.findIndex((layer) => layer.id === draggedId)
+      const targetIndex = prev.findIndex((layer) => layer.id === targetId)
+
+      if (draggedIndex === -1 || targetIndex === -1) return prev
+
+      const newLayers = [...prev]
+      const [draggedLayer] = newLayers.splice(draggedIndex, 1)
+      newLayers.splice(targetIndex, 0, draggedLayer)
+
+      // Update z-index based on new order
+      return newLayers.map((layer, index) => ({
+        ...layer,
+        zIndex: index,
+      }))
+    })
+  }, [])
+
+  const handleApplyPreset = useCallback((layerStates: Record<string, boolean>) => {
+    setLayers((prev) =>
+      prev.map((layer) => ({
+        ...layer,
+        isVisible: layerStates[layer.id] ?? layer.isVisible,
+      })),
+    )
+  }, [])
+
+  // Task handlers using TaskManager
+  const handleOpen = useCallback(async () => {
+    if (taskManagerRef.current) {
+      try {
+        await taskManagerRef.current.executeTask(createOpenTask())
+      } catch (error) {
+        console.error("Open task failed:", error)
+      }
+    }
+  }, [])
+
+  const handleSave = useCallback(async () => {
+    if (taskManagerRef.current) {
+      try {
+        await taskManagerRef.current.executeTask(createSaveTask())
+      } catch (error) {
+        console.error("Save task failed:", error)
+      }
+    }
+  }, [])
+
+  const handleSaveAs = useCallback(async () => {
+    if (taskManagerRef.current) {
+      try {
+        await taskManagerRef.current.executeTask(createSaveAsTask())
+      } catch (error) {
+        console.error("Save As task failed:", error)
+      }
+    }
+  }, [])
+
+  const handleQuickExportPNG = useCallback(async () => {
+    if (taskManagerRef.current) {
+      try {
+        await taskManagerRef.current.executeTask(createQuickExportPNGTask())
+      } catch (error) {
+        console.error("Quick Export PNG task failed:", error)
+      }
+    }
+  }, [])
+
+  const handleQuickExportJPG = useCallback(async () => {
+    if (taskManagerRef.current) {
+      try {
+        await taskManagerRef.current.executeTask(createQuickExportJPGTask())
+      } catch (error) {
+        console.error("Quick Export JPG task failed:", error)
+      }
+    }
+  }, [])
+
+  const handleBulkExport = useCallback(async () => {
+    if (taskManagerRef.current) {
+      try {
+        await taskManagerRef.current.executeTask(createBulkExportTask())
+      } catch (error) {
+        console.error("Bulk Export task failed:", error)
+      }
+    }
+  }, [])
+
+  const canvasRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const updateViewportSize = () => {
+      if (canvasRef.current) {
+        const rect = canvasRef.current.getBoundingClientRect()
+        setViewportSize({ width: rect.width, height: rect.height })
+      }
+    }
+
+    updateViewportSize()
+    window.addEventListener("resize", updateViewportSize)
+    return () => window.removeEventListener("resize", updateViewportSize)
+  }, [])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Tab") {
+        e.preventDefault()
+        setIsLayerPanelVisible((prev) => !prev)
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [])
+
+  const visibleLayers = layers.filter((layer) => layer.isVisible)
+
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
+    <div className="flex h-screen bg-gray-100">
+      <div ref={canvasRef} className="flex-1 flex flex-col">
+        <Canvas
+          layers={visibleLayers}
+          canvasWidth={canvasWidth}
+          canvasHeight={canvasHeight}
+          zoom={zoom}
+          panX={panX}
+          panY={panY}
+          onZoomChange={handleZoomChange}
+          onPanChange={handlePanChange}
+          onOpen={handleOpen}
+          onSave={handleSave}
+          onSaveAs={handleSaveAs}
+          onQuickExportPNG={handleQuickExportPNG}
+          onQuickExportJPG={handleQuickExportJPG}
+          onBulkExport={handleBulkExport}
         />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+      </div>
+      {isLayerPanelVisible && (
+        <LayerPanel
+          layers={layers}
+          selectedLayerId={selectedLayerId}
+          canvasWidth={canvasWidth}
+          canvasHeight={canvasHeight}
+          zoom={zoom}
+          panX={panX}
+          panY={panY}
+          viewportWidth={viewportSize.width}
+          viewportHeight={viewportSize.height}
+          presets={presets}
+          onLayerToggleVisibility={handleLayerToggleVisibility}
+          onLayerSelect={handleLayerSelect}
+          onPanChange={handlePanChange}
+          onAddLayer={handleAddLayer}
+          onDeleteLayer={handleDeleteLayer}
+          onApplyPreset={handleApplyPreset}
+          onReorderLayers={handleReorderLayers}
+          onPresetsChange={setPresets}
+        />
+      )}
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      {/* Export Manager */}
+      <ExportManager
+        layers={layers}
+        presets={presets}
+        canvasWidth={canvasWidth}
+        canvasHeight={canvasHeight}
+        onApplyPreset={handleApplyPreset}
+        isOpen={isExportManagerOpen}
+        onOpenChange={setIsExportManagerOpen}
+      />
     </div>
-  );
+  )
 }
