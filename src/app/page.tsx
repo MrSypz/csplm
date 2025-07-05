@@ -36,29 +36,55 @@ export default function ImageEditor() {
   const [presets, setPresets] = useState<LayerPreset[]>([])
   const [isExportManagerOpen, setIsExportManagerOpen] = useState(false)
 
-  // Start with empty project
-  const [canvasWidth, setCanvasWidth] = useState(6000)
-  const [canvasHeight, setCanvasHeight] = useState(6000)
+  // Dynamic canvas size - starts with reasonable defaults
+  const [canvasWidth, setCanvasWidth] = useState(1920)
+  const [canvasHeight, setCanvasHeight] = useState(1080)
   const [layers, setLayers] = useState<Layer[]>([])
+
+  // Track if a project is loaded
+  const [isProjectLoaded, setIsProjectLoaded] = useState(false)
+  const [projectName, setProjectName] = useState<string | null>(null)
 
   // Initialize task manager
   const taskManagerRef = useRef<TaskManager | null>(null)
 
   const handleLoadProject = useCallback(
-    (newLayers: Layer[], newPresets: LayerPreset[], newCanvasWidth: number, newCanvasHeight: number) => {
-      setLayers(newLayers)
-      setPresets(newPresets)
-      setCanvasWidth(newCanvasWidth)
-      setCanvasHeight(newCanvasHeight)
-      setSelectedLayerId(newLayers.length > 0 ? newLayers[0].id : null)
+      (newLayers: Layer[], newPresets: LayerPreset[], newCanvasWidth: number, newCanvasHeight: number, fileName?: string) => {
+        console.log("Loading project with canvas size:", newCanvasWidth, "x", newCanvasHeight)
 
-      // Reset view
-      setZoom(0.3)
-      setPanX(0)
-      setPanY(0)
-    },
-    [],
+        setLayers(newLayers)
+        setPresets(newPresets)
+        setCanvasWidth(newCanvasWidth)
+        setCanvasHeight(newCanvasHeight)
+        setSelectedLayerId(newLayers.length > 0 ? newLayers[0].id : null)
+        setIsProjectLoaded(true)
+        setProjectName(fileName || null)
+
+        // Reset view with new canvas dimensions
+        setZoom(0.3)
+        setPanX(0)
+        setPanY(0)
+      },
+      [],
   )
+
+  const handleNewProject = useCallback(() => {
+    const newCanvasWidth = 1920  // Default to common resolution
+    const newCanvasHeight = 1080
+
+    setLayers([])
+    setPresets([])
+    setCanvasWidth(newCanvasWidth)
+    setCanvasHeight(newCanvasHeight)
+    setSelectedLayerId(null)
+    setIsProjectLoaded(false)
+    setProjectName(null)
+
+    // Reset view
+    setZoom(0.3)
+    setPanX(0)
+    setPanY(0)
+  }, [])
 
   useEffect(() => {
     taskManagerRef.current = new TaskManager({
@@ -84,18 +110,18 @@ export default function ImageEditor() {
   }, [layers, canvasWidth, canvasHeight, handleLoadProject])
 
   const handleZoomChange = useCallback(
-    (newZoom: number, centerX?: number, centerY?: number) => {
-      if (centerX !== undefined && centerY !== undefined) {
-        const zoomRatio = newZoom / zoom
-        const newPanX = centerX - (centerX - panX) * zoomRatio
-        const newPanY = centerY - (centerY - panY) * zoomRatio
+      (newZoom: number, centerX?: number, centerY?: number) => {
+        if (centerX !== undefined && centerY !== undefined) {
+          const zoomRatio = newZoom / zoom
+          const newPanX = centerX - (centerX - panX) * zoomRatio
+          const newPanY = centerY - (centerY - panY) * zoomRatio
 
-        setPanX(newPanX)
-        setPanY(newPanY)
-      }
-      setZoom(newZoom)
-    },
-    [zoom, panX, panY],
+          setPanX(newPanX)
+          setPanY(newPanY)
+        }
+        setZoom(newZoom)
+      },
+      [zoom, panX, panY],
   )
 
   const handlePanChange = useCallback((x: number, y: number) => {
@@ -118,8 +144,8 @@ export default function ImageEditor() {
       name: `New Layer ${layers.length + 1}`,
       src: `/placeholder.svg?height=${canvasHeight}&width=${canvasWidth}&text=New+Layer+${layers.length + 1}`,
       file_path: `./assets/new_layer_${layers.length + 1}.png`,
-      width: canvasWidth, // Use canvas width instead of fixed 2000
-      height: canvasHeight, // Use canvas height instead of fixed 2000
+      width: canvasWidth,
+      height: canvasHeight,
       isVisible: true,
       zIndex: maxZIndex + 1,
     }
@@ -128,15 +154,15 @@ export default function ImageEditor() {
   }, [layers, canvasWidth, canvasHeight])
 
   const handleDeleteLayer = useCallback(
-    (id: string) => {
-      if (layers.length <= 1) return
-      setLayers((prev) => prev.filter((layer) => layer.id !== id))
-      if (selectedLayerId === id) {
-        const remainingLayers = layers.filter((l) => l.id !== id)
-        setSelectedLayerId(remainingLayers.length > 0 ? remainingLayers[0].id : null)
-      }
-    },
-    [layers, selectedLayerId],
+      (id: string) => {
+        if (layers.length <= 1) return
+        setLayers((prev) => prev.filter((layer) => layer.id !== id))
+        if (selectedLayerId === id) {
+          const remainingLayers = layers.filter((l) => l.id !== id)
+          setSelectedLayerId(remainingLayers.length > 0 ? remainingLayers[0].id : null)
+        }
+      },
+      [layers, selectedLayerId],
   )
 
   const handleReorderLayers = useCallback((draggedId: string, targetId: string) => {
@@ -160,10 +186,10 @@ export default function ImageEditor() {
 
   const handleApplyPreset = useCallback((layerStates: Record<string, boolean>) => {
     setLayers((prev) =>
-      prev.map((layer) => ({
-        ...layer,
-        isVisible: layerStates[layer.id] ?? layer.isVisible,
-      })),
+        prev.map((layer) => ({
+          ...layer,
+          isVisible: layerStates[layer.id] ?? layer.isVisible,
+        })),
     )
   }, [])
 
@@ -257,58 +283,61 @@ export default function ImageEditor() {
   const visibleLayers = layers.filter((layer) => layer.isVisible)
 
   return (
-    <div className="flex h-screen bg-gray-100">
-      <div ref={canvasRef} className="flex-1 flex flex-col">
-        <Canvas
-          layers={visibleLayers}
-          canvasWidth={canvasWidth}
-          canvasHeight={canvasHeight}
-          zoom={zoom}
-          panX={panX}
-          panY={panY}
-          onZoomChange={handleZoomChange}
-          onPanChange={handlePanChange}
-          onOpen={handleOpen}
-          onSave={handleSave}
-          onSaveAs={handleSaveAs}
-          onQuickExportPNG={handleQuickExportPNG}
-          onQuickExportJPG={handleQuickExportJPG}
-          onBulkExport={handleBulkExport}
+      <div className="flex h-screen bg-gray-100">
+        <div ref={canvasRef} className="flex-1 flex flex-col">
+          <Canvas
+              layers={visibleLayers}
+              canvasWidth={canvasWidth}
+              canvasHeight={canvasHeight}
+              zoom={zoom}
+              panX={panX}
+              panY={panY}
+              isProjectLoaded={isProjectLoaded}
+              projectName={projectName}
+              onZoomChange={handleZoomChange}
+              onPanChange={handlePanChange}
+              onOpen={handleOpen}
+              onSave={handleSave}
+              onSaveAs={handleSaveAs}
+              onNewProject={handleNewProject}
+              onQuickExportPNG={handleQuickExportPNG}
+              onQuickExportJPG={handleQuickExportJPG}
+              onBulkExport={handleBulkExport}
+          />
+        </div>
+        {isLayerPanelVisible && (
+            <LayerPanel
+                layers={layers}
+                selectedLayerId={selectedLayerId}
+                canvasWidth={canvasWidth}
+                canvasHeight={canvasHeight}
+                zoom={zoom}
+                panX={panX}
+                panY={panY}
+                viewportWidth={viewportSize.width}
+                viewportHeight={viewportSize.height}
+                presets={presets}
+                onLayerToggleVisibility={handleLayerToggleVisibility}
+                onLayerSelect={handleLayerSelect}
+                onPanChange={handlePanChange}
+                onAddLayer={handleAddLayer}
+                onDeleteLayer={handleDeleteLayer}
+                onApplyPreset={handleApplyPreset}
+                onReorderLayers={handleReorderLayers}
+                onPresetsChange={setPresets}
+            />
+        )}
+
+        {/* Export Manager */}
+        <ExportManager
+            layers={layers}
+            presets={presets}
+            canvasWidth={canvasWidth}
+            canvasHeight={canvasHeight}
+            onApplyPreset={handleApplyPreset}
+            isOpen={isExportManagerOpen}
+            onOpenChange={setIsExportManagerOpen}
         />
       </div>
-      {isLayerPanelVisible && (
-        <LayerPanel
-          layers={layers}
-          selectedLayerId={selectedLayerId}
-          canvasWidth={canvasWidth}
-          canvasHeight={canvasHeight}
-          zoom={zoom}
-          panX={panX}
-          panY={panY}
-          viewportWidth={viewportSize.width}
-          viewportHeight={viewportSize.height}
-          presets={presets}
-          onLayerToggleVisibility={handleLayerToggleVisibility}
-          onLayerSelect={handleLayerSelect}
-          onPanChange={handlePanChange}
-          onAddLayer={handleAddLayer}
-          onDeleteLayer={handleDeleteLayer}
-          onApplyPreset={handleApplyPreset}
-          onReorderLayers={handleReorderLayers}
-          onPresetsChange={setPresets}
-        />
-      )}
-
-      {/* Export Manager */}
-      <ExportManager
-        layers={layers}
-        presets={presets}
-        canvasWidth={canvasWidth}
-        canvasHeight={canvasHeight}
-        onApplyPreset={handleApplyPreset}
-        isOpen={isExportManagerOpen}
-        onOpenChange={setIsExportManagerOpen}
-      />
-    </div>
   )
 }
